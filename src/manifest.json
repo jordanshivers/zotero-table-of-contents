@@ -1,0 +1,15 @@
+{
+  "manifest_version": 2,
+  "name": "Zotero TOC",
+  "version": "1.0.0",
+  "description": "Build and edit a PDF's table of contents, with nested entries, from the reader's contents sidebar.",
+  "author": "Jordan Shivers",
+  "applications": {
+    "zotero": {
+      "id": "zotero-toc@jshivers.local",
+      "update_url": "https://example.invalid/zotero-toc/updates.json",
+      "strict_min_version": "10.0",
+      "strict_max_version": "10.0.*"
+    }
+  }
+}

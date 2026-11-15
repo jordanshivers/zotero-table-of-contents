@@ -1,0 +1,22 @@
+# Generated packages; attach these to GitHub releases instead of committing them.
+dist/
+*.xpi
+*.zip
+
+# Local OS/editor state and dependencies.
+.DS_Store
+._*
+.idea/
+.vscode/
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+
+# Never commit test PDFs, backups, profiles, or credentials.
+*.pdf
+zotero-toc-backups/
+test-profile/
+.env
+.env.*
+!.env.example
