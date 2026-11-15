@@ -1,8 +1,8 @@
 # Zotero TOC
 
-Build and edit a PDF's table of contents from Zotero's contents sidebar.
+Build and edit a PDF's table of contents from Zotero's contents sidebar. 
 
-Experimental. Zotero 10.0.x only. 
+Zotero 10.0.x only. 
 
 ## Install
 
