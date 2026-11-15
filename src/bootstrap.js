@@ -254,13 +254,15 @@ async function startup({ id, rootURI }) {
         win.addEventListener('blur', state.dismiss);
         menu.querySelector('button:not(:disabled)')?.focus();
       },
+      // A closed reader's document throws "can't access dead object".
+      closed(doc) {
+        try { return !doc.defaultView; } catch (e) { return true; }
+      },
       attach(reader, doc) {
+        // Drop closed tabs.
+        for (const known of [...this.docs.keys()]) if (this.closed(known)) this.docs.delete(known);
         // The same page can arrive under two wrappers.
         if (this.docs.has(doc) || [...this.docs.values()].some(known => known.reader === reader)) return;
-        // Drop closed tabs.
-        for (const known of [...this.docs.keys()]) {
-          try { if (!known.defaultView) this.docs.delete(known); } catch (e) { this.docs.delete(known); }
-        }
         const inList = e => {
           const node = e.target?.nodeType === 1 ? e.target : e.target?.parentElement;
           return node?.closest('#outlineView') ? node : null;
@@ -294,11 +296,12 @@ async function startup({ id, rootURI }) {
         const ensure = () => {
           state.timer = null;
           if (this.stopped || this.docs.get(doc) !== state) return;
+          if (this.closed(doc)) { this.docs.delete(doc); return; }
           try {
-            if (!doc.defaultView) { this.docs.delete(doc); return; }
             const list = doc.getElementById('outlineView');
             if (list && !doc.getElementById('zotero-toc-add')) list.parentNode.insertBefore(this.addButton(reader, doc), list);
           } catch (e) {
+            if (this.closed(doc)) { this.docs.delete(doc); return; }
             if (!this.buttonFailed) {
               this.buttonFailed = true;
               this.report(new Error('Zotero TOC could not add its button to the contents sidebar: ' + (e.message || e)));

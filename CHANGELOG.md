@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1
+
+- Fix a "can't access dead object" error when switching between PDFs.
+
 ## 1.0.0
 
 - Add entries for the current page from a button in the contents sidebar.
