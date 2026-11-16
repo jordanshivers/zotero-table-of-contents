@@ -85,7 +85,7 @@ var TOCOutline = (() => {
     return PDFLib.PDFHexString.fromText(value);
   }
   function ensureEditable(pdf) {
-    if (pdf.isEncrypted) throw new Error('Encrypted PDFs cannot be edited by Zotero TOC.');
+    if (pdf.isEncrypted) throw new Error('Encrypted PDFs cannot be edited by Zotero Table of Contents.');
     if (pdf.catalog.has(key('Perms'))) throw new Error('This PDF has document permissions or a certification signature.');
     // Includes signatures in nested form fields.
     for (const [, obj] of pdf.context.enumerateIndirectObjects()) {

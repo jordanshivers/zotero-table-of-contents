@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2
+
+- Zotero can now find and install updates to the plug-in automatically.
+
 ## 1.1.1
 
 - Keep highlights on the right entries when the list is expanded, collapsed,

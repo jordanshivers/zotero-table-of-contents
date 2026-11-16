@@ -17,4 +17,8 @@ test('manifest includes fields required by the Zotero 10 add-on loader', () => {
   // Zotero rejects non-HTTPS update URLs.
   assert.equal(url.protocol, 'https:');
   assert.ok(url.hostname);
+  // The published update manifest must offer the current version.
+  const update = require('../updates.json').addons[app.id].updates[0];
+  assert.equal(update.version, manifest.version);
+  assert.ok(update.update_link.endsWith(`/v${manifest.version}/zotero-table-of-contents-${manifest.version}.xpi`));
 });

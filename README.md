@@ -24,6 +24,8 @@ Encrypted, signed, and read-only PDFs are refused.
 
 ## Develop
 
-Run the tests with `node --test tests/*.test.cjs` and build the `.xpi` with `python3 build.py`. See [CHANGELOG.md](CHANGELOG.md).
+Run the tests with `node --test tests/*.test.cjs` and build the `.xpi` with `python3 build.py`, which also writes `updates.json`; commit that file and
+attach the `.xpi` to a release tagged `v<version>`. See
+[CHANGELOG.md](CHANGELOG.md).
 
 [MIT license](LICENSE). Bundles [pdf-lib](https://github.com/Hopding/pdf-lib) (MIT).

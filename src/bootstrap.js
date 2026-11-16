@@ -12,7 +12,7 @@ async function startup({ id, rootURI }) {
       id, scope, busy: new Set(), stopped: false, docs: new Map(),
       report(error) {
         Zotero.logError(error);
-        Services.prompt.alert(Zotero.getMainWindow(), 'Zotero TOC', error.message || String(error));
+        Services.prompt.alert(Zotero.getMainWindow(), 'Zotero Table of Contents', error.message || String(error));
       },
       page(reader) {
         const inner = reader._internalReader;
@@ -33,7 +33,7 @@ async function startup({ id, rootURI }) {
         return { item, path, bytes, pdf };
       },
       async change(reader, operation) {
-        if (this.stopped) throw new Error('Zotero TOC has been disabled.');
+        if (this.stopped) throw new Error('Zotero Table of Contents has been disabled.');
         if (this.busy.has(reader.itemID)) throw new Error('A TOC change is already being saved for this PDF.');
         this.busy.add(reader.itemID);
         const views = Zotero.Reader._readers.filter(r => r.itemID === reader.itemID);
@@ -395,7 +395,7 @@ async function startup({ id, rootURI }) {
             if (this.closed(doc)) { this.docs.delete(doc); return; }
             if (!this.buttonFailed) {
               this.buttonFailed = true;
-              this.report(new Error('Zotero TOC could not add its button to the contents sidebar: ' + (e.message || e)));
+              this.report(new Error('Zotero Table of Contents could not add its button to the contents sidebar: ' + (e.message || e)));
             }
             return;
           }
@@ -444,7 +444,7 @@ async function startup({ id, rootURI }) {
     }
   } catch (e) {
     Zotero.logError(e);
-    Services.prompt.alert(null, 'Zotero TOC', 'Zotero TOC could not start: ' + (e.message || e));
+    Services.prompt.alert(null, 'Zotero Table of Contents', 'Zotero Table of Contents could not start: ' + (e.message || e));
     throw e;
   }
 }
