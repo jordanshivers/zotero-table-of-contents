@@ -374,6 +374,11 @@ async function startup({ id, rootURI }) {
           this.openMenu(reader, doc, x, y, chosen.length > 1 ? this.bulkItems(reader, state, chosen) : this.menuItems(reader, entry, page));
         };
         doc.addEventListener('pointerdown', state.pointerdown, true);
+        // Rows shift when entries open, close, or are filtered; repaint once Zotero has redrawn.
+        state.repaint = () => {
+          if (state.selected.size) setTimeout(() => { try { this.paint(reader, doc); } catch (e) { Zotero.logError(e); } }, 0);
+        };
+        for (const type of ['click', 'keydown', 'input']) doc.addEventListener(type, state.repaint, true);
         doc.addEventListener('mousedown', state.mousedown, true);
         doc.addEventListener('contextmenu', state.contextmenu, true);
         this.docs.set(doc, state);
@@ -404,6 +409,7 @@ async function startup({ id, rootURI }) {
             this.closeMenu(doc);
             doc.removeEventListener('pointerdown', state.pointerdown, true);
             doc.removeEventListener('mousedown', state.mousedown, true);
+            for (const type of ['click', 'keydown', 'input']) doc.removeEventListener(type, state.repaint, true);
             doc.removeEventListener('contextmenu', state.contextmenu, true);
             state.selected.clear();
             this.paint(state.reader, doc);
