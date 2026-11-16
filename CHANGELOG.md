@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1
+
+- Keep highlights on the right entries when the list is expanded, collapsed,
+  or filtered.
+
 ## 1.1.0
 
 - Select several entries with Cmd/Ctrl-click or Shift-click, then right-click
