@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+- Select several entries with Cmd/Ctrl-click or Shift-click, then right-click
+  to move, nest, or delete them together.
+
 ## 1.0.1
 
 - Fix a "can't access dead object" error when switching between PDFs.

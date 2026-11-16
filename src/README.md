@@ -13,7 +13,12 @@ Download the `.xpi` from the [latest release](../../releases/latest).
 In the contents sidebar:
 
 - **+ Add entry for this page** adds an entry for the page you are reading.
-- Right-click an entry to rename it, point it to the current page, add an entry below or inside it, move it, nest it, or delete it.
+- Right-click an entry to rename it, point it to the current page, add an
+  entry below or inside it, move it, nest it, or delete it.
+- To change several entries at once, Cmd-click (Ctrl-click on Windows and
+  Linux) to pick them one by one, or click one and Shift-click another to pick
+  everything between. Then right-click any of them to move, nest, or delete
+  them together.
 
 Encrypted, signed, and read-only PDFs are refused.
 

@@ -136,6 +136,12 @@ test('bootstrap: current page, disk save, backups, permissions, sidebar edits, c
   assert.equal(menu(1)['Nest under entry above'], true); assert.equal(menu(1)['Move down'], false);
   assert.ok('Add sub-entry for page 2…' in menu(0)); assert.ok('Delete…' in menu(0));
   assert.deepEqual(Array.from(context.TOC.menuItems(reader, null, 1), i => i[0]), ['Add entry for page 2…']);
+  // Several entries at once; the moved entries are reported for reselection.
+  const moved = await context.TOC.change(reader, { type:'move', direction:'down', targets:[row(0)] });
+  assert.deepEqual(Array.from(moved, p => [...p]), [[1]]);
+  assert.equal(sidebar(), 'Section 2 Section 1');
+  await context.TOC.change(reader, { type:'move', direction:'up', targets:[row(1)] });
+  assert.equal(sidebar(), 'Section 1 Section 2');
   await context.TOC.change(reader, { type:'move', direction:'outdent', ...row(1) });
   await context.TOC.change(reader, { type:'remove', ...row(0) });
   await context.TOC.change(reader, { type:'remove', ...row(0) });

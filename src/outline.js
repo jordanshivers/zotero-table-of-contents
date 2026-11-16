@@ -141,12 +141,45 @@ var TOCOutline = (() => {
     if (!Number.isInteger(p) || p < 0 || p >= pdf.getPageCount()) throw new Error('The current PDF page is unavailable.');
     return pdf.getPage(p).ref;
   }
+  // Orphaned objects are kept; others may reference them.
+  function drop(m) {
+    m.parent.children.splice(m.parent.children.indexOf(m), 1);
+    relink(m.parent);
+  }
+  function shift(m, d) {
+    const parent = m.parent, index = parent.children.indexOf(m);
+    if (d === 'up' || d === 'down') {
+      const other = index + (d === 'up' ? -1 : 1);
+      if (!parent.children[other]) throw new Error(`This entry is already ${d === 'up' ? 'first' : 'last'}.`);
+      parent.children[index] = parent.children[other];
+      parent.children[other] = m;
+      relink(parent);
+    } else if (d === 'indent') {
+      const previous = parent.children[index - 1];
+      if (!previous) throw new Error('There is no entry above this one to nest it under.');
+      parent.children.splice(index, 1);
+      previous.children.push(m);
+      relink(parent); relink(previous);
+    } else if (d === 'outdent') {
+      const grand = parent.parent;
+      if (!grand) throw new Error('This entry is already at the top level.');
+      parent.children.splice(index, 1);
+      grand.children.splice(grand.children.indexOf(parent) + 1, 0, m);
+      relink(parent); relink(grand);
+    } else throw new Error('Unknown TOC operation.');
+  }
+  // Document order of two paths.
+  function order(a, b) {
+    for (let i = 0; i < a.length && i < b.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+    return a.length - b.length;
+  }
   /* Operations (paths are sidebar paths):
    *   add      { title, pageIndex, where?: 'child' | 'after', path? }
    *   rename   { path, title }
    *   retarget { path, pageIndex }
    *   move     { path, direction: 'up' | 'down' | 'indent' | 'outdent' }
    *   remove   { path }
+   * move and remove also take { targets: [{ path, shape }] } in place of path.
    * Returns { path, title, total } for verifying the saved file.
    */
   function edit(pdf, operation) {
@@ -174,41 +207,39 @@ var TOCOutline = (() => {
       parent.children.splice(index, 0, target);
       relink(parent);
       recount(top);
+    } else if (operation.targets) {
+      // Several entries at once: move or remove only.
+      if (type !== 'move' && type !== 'remove') throw new Error('Unknown TOC operation.');
+      top = model(pdf);
+      const picked = new Set(operation.targets.map(t => locate(top, t.path, t.shape)));
+      // Sub-entries follow a selected ancestor.
+      const nodes = [...picked].filter(m => {
+        for (let p = m.parent; p; p = p.parent) if (picked.has(p)) return false;
+        return true;
+      }).map(m => [realPath(m), m]).sort((a, b) => order(a[0], b[0])).map(x => x[1]);
+      if (!nodes.length) throw new Error(STALE);
+      const d = operation.direction;
+      // Work from the far end so entries keep their relative order.
+      if (type === 'move' && (d === 'down' || d === 'outdent')) nodes.reverse();
+      for (const m of nodes) { if (type === 'remove') drop(m); else shift(m, d); }
+      recount(top);
+      if (type === 'move') {
+        const moved = nodes.map(m => [realPath(m), m]).sort((x, y) => order(x[0], y[0]));
+        return { path: moved[0][0], title: text(moved[0][1].node, 'Title'), total: size(top), paths: moved.map(x => x[0]) };
+      }
     } else {
       top = model(pdf);
       target = locate(top, path, shape);
-      const parent = target.parent, index = parent.children.indexOf(target);
       if (type === 'rename') target.node.set(key('Title'), title(operation.title));
       else if (type === 'retarget') {
         target.node.set(key('Dest'), pdf.context.obj([pageRef(pdf, operation.pageIndex), 'Fit']));
         target.node.delete(key('A'));
       } else if (type === 'remove') {
-        // Orphaned objects are kept; others may reference them.
-        parent.children.splice(index, 1);
-        relink(parent);
+        drop(target);
         recount(top);
         target = null;
       } else if (type === 'move') {
-        const d = operation.direction;
-        if (d === 'up' || d === 'down') {
-          const other = index + (d === 'up' ? -1 : 1);
-          if (!parent.children[other]) throw new Error(`This entry is already ${d === 'up' ? 'first' : 'last'}.`);
-          parent.children[index] = parent.children[other];
-          parent.children[other] = target;
-          relink(parent);
-        } else if (d === 'indent') {
-          const previous = parent.children[index - 1];
-          if (!previous) throw new Error('There is no entry above this one to nest it under.');
-          parent.children.splice(index, 1);
-          previous.children.push(target);
-          relink(parent); relink(previous);
-        } else if (d === 'outdent') {
-          const grand = parent.parent;
-          if (!grand) throw new Error('This entry is already at the top level.');
-          parent.children.splice(index, 1);
-          grand.children.splice(grand.children.indexOf(parent) + 1, 0, target);
-          relink(parent); relink(grand);
-        } else throw new Error('Unknown TOC operation.');
+        shift(target, operation.direction);
         recount(top);
       } else throw new Error('Unknown TOC operation.');
     }

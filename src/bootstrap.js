@@ -50,7 +50,7 @@ async function startup({ id, rootURI }) {
               (expected.path && scope.TOCOutline.at(saved, expected.path)?.title !== expected.title)) {
             throw new Error('PDF verification failed. The original file has not been changed.');
           }
-          const shown = scope.TOCOutline.sidebarPath(saved, expected.path);
+          const shown = (expected.paths || [expected.path]).map(p => scope.TOCOutline.sidebarPath(saved, p)).filter(Boolean);
           const keepByPosition = operation.type === 'rename' || operation.type === 'retarget';
           const backupDir = PathUtils.join(Zotero.DataDirectory.dir, 'zotero-toc-backups', `${item.libraryID}-${item.key}`);
           await IOUtils.makeDirectory(backupDir, { createAncestors: true });
@@ -67,6 +67,7 @@ async function startup({ id, rootURI }) {
           // As Zotero does after its own page edits.
           item.attachmentLastProcessedModificationTime = Math.floor((await item.attachmentModificationTime) / 1000);
           await item.saveTx({ skipAll: true });
+          for (const state of this.docs.values()) if (views.includes(state.reader)) state.selected.clear();
           for (const r of views) {
             const open = this.expanded(r._internalReader._state.outline, keepByPosition);
             await r.reload();
@@ -83,6 +84,7 @@ async function startup({ id, rootURI }) {
             inner.toggleSidebar(true);
             inner.setSidebarView('outline');
           }
+          return shown;
         } finally {
           for (const r of views) {
             try { r._internalReader.unfreeze(); } catch (e) { Zotero.logError(e); }
@@ -103,7 +105,7 @@ async function startup({ id, rootURI }) {
         try { walk(outline, ''); } catch (e) { Zotero.logError(e); }
         return open;
       },
-      expand(outline, open, path, byPosition) {
+      expand(outline, open, paths, byPosition) {
         let changed = false;
         const walk = (items, prefix) => {
           for (let i = 0; i < (items?.length || 0); i++) {
@@ -113,30 +115,69 @@ async function startup({ id, rootURI }) {
           }
         };
         walk(outline, '');
-        let items = outline;
-        for (const index of (path || []).slice(0, -1)) {
-          const item = items?.[index];
-          if (!item) break;
-          item.expanded = true; changed = true;
-          items = item.items;
+        for (const path of paths) {
+          let items = outline;
+          for (const index of path.slice(0, -1)) {
+            const item = items?.[index];
+            if (!item) break;
+            item.expanded = true; changed = true;
+            items = item.items;
+          }
         }
         return changed;
       },
       // Rows are numbered top-down, skipping children of collapsed entries.
-      find(outline, row) {
-        let counter = -1, found = null;
+      rows(outline) {
+        const rows = [];
         const walk = (items, path, shape) => {
-          for (let i = 0; i < items.length && !found; i++) {
+          for (let i = 0; i < items.length; i++) {
             const item = items[i];
-            counter++;
             const here = [...path, i], counts = [...shape, items.length];
-            if (counter === row) { found = { item, path: here, shape: counts, index: i, siblings: items.length }; return; }
+            rows.push({ item, path: here, shape: counts, index: i, siblings: items.length, key: here.join(',') });
             const rendered = item.matched !== false || item.childMatched !== false;
             if (rendered && item.expanded && item.items) walk(item.items, here, counts);
           }
         };
         walk(outline || [], [], []);
-        return found;
+        return rows;
+      },
+      find(outline, row) {
+        return this.rows(outline)[row] || null;
+      },
+      // Highlight selected rows; forget entries that are no longer listed.
+      paint(reader, doc) {
+        const state = this.docs.get(doc);
+        if (!state || this.closed(doc)) return;
+        const rows = this.rows(reader._internalReader._state.outline);
+        const listed = new Set(rows.map(r => r.key));
+        for (const key of [...state.selected]) if (!listed.has(key)) state.selected.delete(key);
+        const items = doc.querySelectorAll('#outlineView .item');
+        for (let i = 0; i < items.length; i++) {
+          const on = state.selected.has(rows[Number(items[i].dataset.id)]?.key);
+          if (on !== (items[i].dataset.tocSelected === '1')) {
+            items[i].dataset.tocSelected = on ? '1' : '';
+            items[i].style.background = on ? 'color-mix(in srgb, SelectedItem 40%, transparent)' : '';
+          }
+        }
+      },
+      // Menu for several selected entries.
+      bulkItems(reader, state, entries) {
+        const targets = entries.map(e => ({ path: e.path, shape: e.shape }));
+        const move = direction => async () => {
+          const shown = await this.change(reader, { type: 'move', direction, targets });
+          for (const path of shown) state.selected.add(path.join(','));
+        };
+        return [
+          ['Move up', move('up')],
+          ['Move down', move('down')],
+          ['Nest under entry above', move('indent')],
+          ['Move out one level', move('outdent')],
+          null,
+          [`Delete ${entries.length} entries…`, async () => {
+            if (Services.prompt.confirm(Zotero.getMainWindow(), 'Delete TOC entries',
+              `Remove these ${entries.length} entries and their sub-entries from this PDF’s contents?`)) await this.change(reader, { type: 'remove', targets });
+          }]
+        ];
       },
       currentPage(reader) {
         try { return this.page(reader); } catch (e) { return null; }
@@ -198,9 +239,8 @@ async function startup({ id, rootURI }) {
           }]
         ];
       },
-      openMenu(reader, doc, x, y, entry, page) {
+      openMenu(reader, doc, x, y, items) {
         this.closeMenu(doc);
-        const items = this.menuItems(reader, entry, page);
         if (!items.some(Boolean)) return;
         const menu = doc.createElement('div');
         menu.id = 'zotero-toc-menu';
@@ -228,7 +268,7 @@ async function startup({ id, rootURI }) {
             b.addEventListener('mouseleave', () => highlight(false));
             b.addEventListener('focus', () => highlight(true));
             b.addEventListener('blur', () => highlight(false));
-            b.addEventListener('click', () => { this.closeMenu(doc); this.run(action); });
+            b.addEventListener('click', async () => { this.closeMenu(doc); await this.run(action); this.paint(reader, doc); });
           }
           menu.append(b);
         }
@@ -267,13 +307,46 @@ async function startup({ id, rootURI }) {
           const node = e.target?.nodeType === 1 ? e.target : e.target?.parentElement;
           return node?.closest('#outlineView') ? node : null;
         };
-        const state = { reader, dismiss: null, page: null, pageTime: 0 };
+        const state = { reader, dismiss: null, page: null, pageTime: 0, selected: new Set(), anchor: null };
+        const accel = e => Zotero.isMac ? e.metaKey : e.ctrlKey;
+        const rightClick = e => e.button === 2 || (e.button === 0 && e.ctrlKey && Zotero.isMac);
+        const entryOf = (rows, row) => row ? rows[Number(row.dataset.id)] : null;
+        // Cmd/Ctrl-click or Shift-click on an entry selects instead of navigating.
+        const selecting = e => e.button === 0 && !rightClick(e) && (accel(e) || e.shiftKey) &&
+          inList(e)?.closest('.item') && !inList(e).closest('.toggle');
         state.pointerdown = e => {
-          if (!(e.button === 2 || (e.button === 0 && e.ctrlKey && Zotero.isMac)) || !inList(e)) return;
-          // Zotero navigates on any mouse button; remember the page and block that.
-          state.page = this.currentPage(reader); state.pageTime = Date.now();
-          e.stopPropagation();
+          const node = inList(e);
+          if (!node || this.stopped) return;
+          if (rightClick(e)) {
+            // Zotero navigates on any mouse button; remember the page and block that.
+            state.page = this.currentPage(reader); state.pageTime = Date.now();
+            e.stopPropagation();
+            return;
+          }
+          if (e.button !== 0 || node.closest('.toggle')) return;
+          const rows = this.rows(reader._internalReader._state.outline);
+          const entry = entryOf(rows, node.closest('.item'));
+          if (!entry || !selecting(e)) {
+            // Plain click: Zotero navigates; start over from here.
+            state.selected.clear();
+            state.anchor = entry?.key ?? null;
+          } else {
+            e.stopPropagation(); e.preventDefault();
+            if (e.shiftKey) {
+              let from = rows.findIndex(r => r.key === state.anchor);
+              if (from < 0) { from = rows.indexOf(entry); state.anchor = entry.key; }
+              const to = rows.indexOf(entry);
+              if (!accel(e)) state.selected.clear();
+              for (let i = Math.min(from, to); i <= Math.max(from, to); i++) state.selected.add(rows[i].key);
+            } else {
+              if (!state.selected.delete(entry.key)) state.selected.add(entry.key);
+              state.anchor = entry.key;
+            }
+          }
+          this.paint(reader, doc);
         };
+        // Keep Shift-click from selecting text.
+        state.mousedown = e => { if (selecting(e)) e.preventDefault(); };
         state.contextmenu = e => {
           const node = inList(e);
           if (!node || this.stopped) return;
@@ -282,17 +355,29 @@ async function startup({ id, rootURI }) {
           const row = node.closest('.item') || (e.mozInputSource === 6 ? doc.querySelector('#outlineView .item.active') : null);
           let entry = null, x = e.clientX, y = e.clientY;
           if (row && !node.closest('.item')) ({ left: x, bottom: y } = row.getBoundingClientRect());
+          const rows = this.rows(reader._internalReader._state.outline);
           if (row) {
-            entry = this.find(reader._internalReader._state.outline, Number(row.dataset.id));
+            entry = entryOf(rows, row);
             if (!entry) return;
           }
+          // Cmd/Ctrl-right-click adds to or removes from the selection.
+          if (entry && accel(e) && !(Zotero.isMac && e.ctrlKey)) {
+            if (!state.selected.delete(entry.key)) state.selected.add(entry.key);
+            state.anchor = entry.key;
+            this.paint(reader, doc);
+            return;
+          }
+          if (!entry || !state.selected.has(entry.key)) state.selected.clear();
+          this.paint(reader, doc);
           const page = Date.now() - state.pageTime < 3000 ? state.page : this.currentPage(reader);
-          this.openMenu(reader, doc, x, y, entry, page);
+          const chosen = rows.filter(r => state.selected.has(r.key));
+          this.openMenu(reader, doc, x, y, chosen.length > 1 ? this.bulkItems(reader, state, chosen) : this.menuItems(reader, entry, page));
         };
         doc.addEventListener('pointerdown', state.pointerdown, true);
+        doc.addEventListener('mousedown', state.mousedown, true);
         doc.addEventListener('contextmenu', state.contextmenu, true);
         this.docs.set(doc, state);
-        // The sidebar is rebuilt whenever it opens, so keep re-adding the button.
+        // The sidebar is rebuilt whenever it opens, so keep re-adding the button and highlights.
         const ensure = () => {
           state.timer = null;
           if (this.stopped || this.docs.get(doc) !== state) return;
@@ -300,6 +385,7 @@ async function startup({ id, rootURI }) {
           try {
             const list = doc.getElementById('outlineView');
             if (list && !doc.getElementById('zotero-toc-add')) list.parentNode.insertBefore(this.addButton(reader, doc), list);
+            if (list) try { this.paint(reader, doc); } catch (e) { Zotero.logError(e); }
           } catch (e) {
             if (this.closed(doc)) { this.docs.delete(doc); return; }
             if (!this.buttonFailed) {
@@ -317,7 +403,10 @@ async function startup({ id, rootURI }) {
           try {
             this.closeMenu(doc);
             doc.removeEventListener('pointerdown', state.pointerdown, true);
+            doc.removeEventListener('mousedown', state.mousedown, true);
             doc.removeEventListener('contextmenu', state.contextmenu, true);
+            state.selected.clear();
+            this.paint(state.reader, doc);
             if (state.timer) clearTimeout(state.timer);
             doc.getElementById('zotero-toc-add')?.remove();
           } catch (e) { Zotero.logError(e); }
@@ -329,7 +418,8 @@ async function startup({ id, rootURI }) {
         bar.id = 'zotero-toc-add';
         bar.style.cssText = 'position:sticky;top:0;z-index:1;padding:6px 8px 2px;background:var(--material-sidepane, Canvas);';
         const b = doc.createElement('button'); b.type = 'button'; b.textContent = '+ Add entry for this page';
-        b.title = 'Add a table of contents entry for the page you are reading. Right-click an entry to rename, move, nest, or delete it.';
+        b.title = 'Add a table of contents entry for the page you are reading. Right-click an entry to rename, move, nest, or delete it. ' +
+          (Zotero.isMac ? 'Cmd' : 'Ctrl') + '-click or Shift-click to select several.';
         b.style.cssText = 'display:block;width:100%;font:inherit;font-size:12px;padding:4px 7px;border:1px solid GrayText;border-radius:4px;background:ButtonFace;color:ButtonText;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
         b.addEventListener('click', () => this.run(() => this.add(reader)));
         bar.append(b);

@@ -148,3 +148,27 @@ test('refuses invalid pages, blank titles, signatures, and cyclic outlines', asy
   cyclic.context.lookup(ref).set(N.of('Next'), ref);
   assert.throws(() => O.tree(cyclic), /Circular/);
 });
+test('moves and deletes several entries at once', async () => {
+  let pdf = await fixture();
+  for (const [t, p] of [['A', 0], ['B', 1], ['C', 2], ['D', 3], ['E', 3]]) add(pdf, t, p);
+  const many = (type, paths, extra = {}) => O.edit(pdf, { type, targets: paths.map(path => ({ path })), ...extra });
+  // Neighbours nest under the same entry and keep their order.
+  assert.deepEqual(many('move', [[2], [1]], { direction: 'indent' }).paths, [[0, 0], [0, 1]]);
+  assert.equal(show(O.tree(pdf)), 'A(B C) D E');
+  // A sub-entry follows its selected parent.
+  many('move', [[0], [0, 1]], { direction: 'down' });
+  assert.equal(show(O.tree(pdf)), 'D A(B C) E');
+  assert.deepEqual(many('move', [[1, 0], [1, 1]], { direction: 'outdent' }).paths, [[2], [3]]);
+  assert.equal(show(O.tree(pdf)), 'D A B C E');
+  many('move', [[2], [4]], { direction: 'up' });
+  assert.equal(show(O.tree(pdf)), 'D B A E C');
+  // One impossible move cancels the whole change.
+  assert.throws(() => many('move', [[0], [3]], { direction: 'up' }), /already first/);
+  assert.throws(() => many('rename', [[0]]), /Unknown/);
+  pdf = await roundtrip(pdf);
+  checkLinks(pdf);
+  assert.deepEqual(many('remove', [[0], [2], [4]]), { path: null, title: null, total: 2 });
+  pdf = await roundtrip(pdf);
+  assert.equal(show(O.tree(pdf)), 'B E');
+  checkLinks(pdf);
+});
