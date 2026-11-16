@@ -1,6 +1,6 @@
-# Zotero TOC
+# Zotero Table of Contents
 
-Build and edit a PDF's table of contents from Zotero's contents sidebar. 
+Build and edit a PDF's table of contents in Zotero. 
 
 Zotero 10.0.x only. 
 
@@ -16,10 +16,6 @@ In the contents sidebar:
 - Right-click an entry to rename it, point it to the current page, add an entry below or inside it, move it, nest it, or delete it.
 
 Encrypted, signed, and read-only PDFs are refused.
-
-## Backups
-
-Each edit first copies the PDF to `zotero-toc-backups/<libraryID>-<attachmentKey>/` in your Zotero data directory: `original.pdf` (before the first edit) and `previous.pdf` (before the latest). To restore, replace the attachment's file with one of them.
 
 ## Develop
 
