@@ -1,4 +1,4 @@
-/* global Zotero, Services, IOUtils, PathUtils */
+/* global Zotero, Services, IOUtils, PathUtils, Cu */
 var TOC;
 async function startup({ id, rootURI }) {
   try {
@@ -41,6 +41,15 @@ async function startup({ id, rootURI }) {
           const { item, path, bytes, pdf } = await this.load(reader);
           const library = Zotero.Libraries.get(item.libraryID);
           if (!item.isEditable() || !library.filesEditable) throw new Error('This library does not allow editing this PDF.');
+          // Headings Zotero detected vanish once the PDF has an entry of its own.
+          const detected = scope.TOCOutline.tree(pdf).length ? [] : this.seed(reader);
+          if (operation.type === 'import' && !detected.length) throw new Error('There are no detected headings to save.');
+          if (detected.length) {
+            const keep = this.askKeep(detected, operation);
+            if (keep === null) return [];
+            if (keep) operation = { ...operation, seed: detected };
+            else if (operation.where || operation.type !== 'add') return [];
+          }
           const expected = scope.TOCOutline.edit(pdf, operation);
           const output = await pdf.save({ useObjectStreams: false });
           // Verify the output before replacing the file.
@@ -70,19 +79,13 @@ async function startup({ id, rootURI }) {
           for (const state of this.docs.values()) if (views.includes(state.reader)) state.selected.clear();
           for (const r of views) {
             const open = this.expanded(r._internalReader._state.outline, keepByPosition);
-            await r.reload();
-            const inner = r._internalReader;
-            const view = inner._primaryView;
-            // The reloaded view inherits the cached outline; clear it to force a re-read.
-            view._outline = null;
-            await view.setSidebarView('outline');
             try {
-              // Reopen entries that were open.
-              const outline = inner._state.outline;
-              if (outline && this.expand(outline, open, shown, keepByPosition)) view._onSetOutline(outline.slice());
-            } catch (e) { Zotero.logError(e); }
-            inner.toggleSidebar(true);
-            inner.setSidebarView('outline');
+              this.show(r, saved, open, shown, keepByPosition);
+            } catch (e) {
+              await this.reload(r, open, shown, keepByPosition);
+            }
+            r._internalReader.toggleSidebar(true);
+            r._internalReader.setSidebarView('outline');
           }
           return shown;
         } finally {
@@ -91,6 +94,90 @@ async function startup({ id, rootURI }) {
           }
           this.busy.delete(reader.itemID);
         }
+      },
+      // Put the saved entries straight into the sidebar; the pages have not changed.
+      show(reader, saved, open, shown, byPosition) {
+        const convert = e => {
+          if (e.pageIndex === null) throw new Error('Entry without a page.');
+          return { title: e.title, items: e.children.map(convert),
+            location: { position: { pageIndex: e.pageIndex, rects: [[e.left, e.top, e.left, e.top]] } } };
+        };
+        let items = saved.map(convert);
+        // Zotero must detect headings again when none are saved.
+        if (!items.length) throw new Error('No saved entries.');
+        if (items.length === 1 && items[0].items.length > 1) items = items[0].items;
+        this.expand(items, open, shown, byPosition);
+        const view = reader._internalReader._primaryView;
+        view._onSetOutline(Cu.cloneInto(items, reader._iframeWindow));
+      },
+      // Fallback: reload the PDF and let Zotero read the contents again.
+      async reload(reader, open, shown, byPosition) {
+        await reader.reload();
+        const inner = reader._internalReader;
+        const view = inner._primaryView;
+        // The reloaded view inherits the cached outline; clear it to force a re-read.
+        view._outline = null;
+        await view.setSidebarView('outline');
+        try {
+          // Reopen entries that were open.
+          const outline = inner._state.outline;
+          if (outline && this.expand(outline, open, shown, byPosition)) view._onSetOutline(outline.slice());
+        } catch (e) { Zotero.logError(e); }
+      },
+      // Detected headings carry a sortIndex; saved ones do not.
+      detected(reader) {
+        try { return reader._internalReader._state.outline?.[0]?.sortIndex !== undefined; } catch (e) { return false; }
+      },
+      // The sidebar's headings as [{ title, pageIndex, top, left, children }].
+      seed(reader) {
+        const convert = items => {
+          const list = [];
+          for (let i = 0; i < (items?.length || 0); i++) {
+            const item = items[i], position = item.location?.position, rect = position?.rects?.[0];
+            list.push({ title: String(item.title ?? ''), pageIndex: position?.pageIndex ?? null,
+              top: rect ? Number(rect[3]) : null, left: rect ? Number(rect[0]) : null, children: convert(item.items) });
+          }
+          return list;
+        };
+        try { return convert(reader._internalReader._state.outline); } catch (e) { Zotero.logError(e); return []; }
+      },
+      // true: save the detected headings too; false: don't; null: cancel.
+      askKeep(detected, operation) {
+        const n = scope.TOCOutline.count(detected), prompt = Services.prompt, win = Zotero.getMainWindow();
+        const these = n === 1 ? 'This heading was' : `These ${n} headings were`;
+        const about = `${these} detected by Zotero and ${n === 1 ? 'is' : 'are'} not saved in the PDF.`;
+        if (operation.type === 'import') return true;
+        if (operation.type === 'add' && !operation.where) {
+          const flags = prompt.BUTTON_POS_0 * prompt.BUTTON_TITLE_IS_STRING + prompt.BUTTON_POS_1 * prompt.BUTTON_TITLE_CANCEL +
+            prompt.BUTTON_POS_2 * prompt.BUTTON_TITLE_IS_STRING;
+          const choice = prompt.confirmEx(win, 'Keep detected headings?',
+            `${about} Once you add your own entry, Zotero stops showing them unless they are saved too.`,
+            flags, 'Keep headings and add', null, 'Add only mine', null, {});
+          return choice === 0 ? true : choice === 2 ? false : null;
+        }
+        return prompt.confirm(win, 'Save detected headings?', `${about} Save them so they can be edited?`) ? true : null;
+      },
+      // The selected text in the PDF, as a title and a spot on the page.
+      selection(reader) {
+        try {
+          const all = reader._internalReader._lastView._selectionRanges;
+          let first = null;
+          for (let i = 0; i < (all?.length || 0); i++) {
+            if (!all[i].collapsed && (!first || all[i].position.pageIndex < first.position.pageIndex)) first = all[i];
+          }
+          const title = String(first?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
+          if (!title) return null;
+          const rects = first.position.rects;
+          let top = -Infinity, left = Infinity;
+          for (let i = 0; i < rects.length; i++) { top = Math.max(top, rects[i][3]); left = Math.min(left, rects[i][0]); }
+          return { title, pageIndex: first.position.pageIndex, top: Number.isFinite(top) ? top : null, left: Number.isFinite(left) ? left : null };
+        } catch (e) { return null; }
+      },
+      // Right-click menu of the PDF itself.
+      viewMenu({ reader, append }) {
+        if (this.stopped || reader.type !== 'pdf') return;
+        const picked = this.selection(reader);
+        if (picked) append({ label: 'Add outline item', onCommand: () => this.run(() => this.change(reader, { type: 'add', ...picked })) });
       },
       // Keyed by position, or by titles when positions will change.
       expanded(outline, byPosition) {
@@ -210,7 +297,8 @@ async function startup({ id, rootURI }) {
         const here = entry && { path: entry.path, shape: entry.shape };
         const move = direction => () => this.change(reader, { type: 'move', direction, ...here });
         const forPage = page === null ? null : `page ${page + 1}`;
-        if (!entry) return forPage ? [[`Add entry for ${forPage}…`, () => this.add(reader, page)]] : [];
+        const keep = this.detected(reader) && ['Save detected headings to PDF', () => this.change(reader, { type: 'import' })];
+        if (!entry) return [forPage && [`Add entry for ${forPage}…`, () => this.add(reader, page)], null, keep];
         const descendants = (function total(items) {
           let n = 0;
           for (let i = 0; i < (items?.length || 0); i++) n += 1 + total(items[i].items);
@@ -236,7 +324,9 @@ async function startup({ id, rootURI }) {
             const extra = descendants ? ` and its ${descendants} sub-${descendants === 1 ? 'entry' : 'entries'}` : '';
             if (Services.prompt.confirm(Zotero.getMainWindow(), 'Delete TOC entry',
               `Remove “${title}”${extra} from this PDF’s contents?`)) await this.change(reader, { type: 'remove', ...here });
-          }]
+          }],
+          null,
+          keep
         ];
       },
       openMenu(reader, doc, x, y, items) {
@@ -437,7 +527,9 @@ async function startup({ id, rootURI }) {
       }
     };
     TOC.handler = TOC.render.bind(TOC);
+    TOC.menuHandler = TOC.viewMenu.bind(TOC);
     Zotero.Reader.registerEventListener('renderToolbar', TOC.handler, id);
+    Zotero.Reader.registerEventListener('createViewContextMenu', TOC.menuHandler, id);
     for (const reader of Zotero.Reader._readers) {
       const doc = reader._iframeWindow?.document;
       if (doc && reader.type === 'pdf') TOC.attach(reader, doc);
@@ -452,6 +544,7 @@ function shutdown() {
   if (!TOC) return;
   TOC.stopped = true;
   Zotero.Reader.unregisterEventListener('renderToolbar', TOC.handler);
+  Zotero.Reader.unregisterEventListener('createViewContextMenu', TOC.menuHandler);
   TOC.detach();
   for (const reader of Zotero.Reader._readers) {
     const doc = reader._iframeWindow?.document;

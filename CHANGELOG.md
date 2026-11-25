@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+
+- Save the headings Zotero detects into the PDF so they can be edited. Adding
+  or editing an entry in a PDF that only has detected headings now asks
+  whether to keep them.
+- Select text in the PDF and right-click it to add an outline item with that
+  title, pointing at that spot.
+- Edits update the sidebar in place instead of reloading the PDF.
+
 ## 1.1.2
 
 - Zotero can now find and install updates to the plug-in automatically.

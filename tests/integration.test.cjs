@@ -18,12 +18,12 @@ test('bootstrap: current page, disk save, backups, permissions, sidebar edits, c
   const inner = {
     _state: { outline: [{ title: 'Stale cached outline' }], sidebarView: 'outline', outlineQuery: 'old filter' },
     _lastView: { _iframeWindow: { PDFViewerApplication: { pdfViewer: { currentPageNumber: 3 } } } },
-    _primaryView: { initializedPromise: Promise.resolve() },
+    _primaryView: { initializedPromise: Promise.resolve(), _onSetOutline(outline) { calls.push('direct'); inner._updateState({ outline }); } },
     _updateState(update) { Object.assign(this._state, update); }, freeze() { calls.push('freeze'); }, unfreeze() { calls.push('unfreeze'); },
     toggleSidebar(value) { assert.equal(value, true); calls.push('sidebar'); },
     setSidebarView(value) { assert.equal(value, 'outline'); }
   };
-  const reader = { itemID: 1, _internalReader: inner, reload: async () => {
+  const reader = { itemID: 1, type: 'pdf', _iframeWindow: {}, _internalReader: inner, reload: async () => {
     calls.push('reload');
     const reloaded = await PDFLib.PDFDocument.load(await fs.readFile(file));
     // Mimics Zotero: cached outline, hidden lone parent, collapsed entries.
@@ -54,15 +54,21 @@ test('bootstrap: current page, disk save, backups, permissions, sidebar edits, c
       if (options.tmpPath) await fs.rename(options.tmpPath, p);
     }
   };
-  let handler;
+  const handlers = {};
+  // Answers for the next prompts.
+  let choice = 0; const asked = [];
   // Separate JS realms, as in Firefox.
   const context = vm.createContext({ console, setTimeout, clearTimeout,
+    Cu: { cloneInto: value => JSON.parse(JSON.stringify(value)) },
     IOUtils: io, PathUtils: path,
     Zotero: { initializationPromise: Promise.resolve(), DataDirectory: { dir },
       Items: { getAsync: async () => item }, Libraries: { get: () => ({ filesEditable: true }) },
-      Reader: { _readers: [reader], registerEventListener: (t,h) => { assert.equal(t,'renderToolbar'); handler=h; },
-        unregisterEventListener: (t,h) => { assert.equal(h,handler); calls.push('unregister'); } }, logError: e=>{throw e;} },
-    Services: { scriptloader: { loadSubScriptWithOptions: (p, options) => {
+      getMainWindow: () => null,
+      Reader: { _readers: [reader], registerEventListener: (t,h) => { handlers[t]=h; },
+        unregisterEventListener: (t,h) => { assert.equal(h,handlers[t]); calls.push('unregister ' + t); } }, logError: e=>{throw e;} },
+    Services: { prompt: { BUTTON_POS_0: 1, BUTTON_POS_1: 256, BUTTON_POS_2: 65536, BUTTON_TITLE_IS_STRING: 127, BUTTON_TITLE_CANCEL: 2,
+        confirmEx: (w, t, message) => { asked.push(message); return choice; }, confirm: (w, t, message) => { asked.push(message); return choice === 0; } },
+      scriptloader: { loadSubScriptWithOptions: (p, options) => {
       assert.equal(options.ignoreCache, true);
       vm.runInNewContext(syncFS.readFileSync(p,'utf8'), options.target, { filename: p });
     } } }
@@ -81,8 +87,35 @@ test('bootstrap: current page, disk save, backups, permissions, sidebar edits, c
   const sidebar = () => titles(inner._state.outline);
   // Resolve a sidebar row as a right-click would.
   const row = n => { const { path, shape } = context.TOC.find(inner._state.outline, n); return { path: [...path], shape: [...shape] }; };
+  assert.deepEqual(Object.keys(handlers).sort(), ['createViewContextMenu', 'renderToolbar']);
+  // Headings Zotero detected: offered for saving, and kept on request.
+  const heading = (title, y) => ({ title, sortIndex: '00000|000000|00000', items: [],
+    location: { position: { pageIndex: 0, rects: [[50, y - 20, 200, y]] } } });
+  inner._state.outline = [heading('Intro', 700), heading('Methods', 400)];
+  const labels = entry => Array.from(context.TOC.menuItems(reader, entry, 1)).filter(Boolean).map(i => i[0]);
+  assert.ok(labels(null).includes('Save detected headings to PDF'));
+  choice = 1;
+  assert.equal((await context.TOC.change(reader, { type:'add', title:'Chapter 3', pageIndex:2 })).length, 0);
+  assert.deepEqual(await fs.readFile(file), Buffer.from(original));
+  assert.match(asked.pop(), /These 2 headings were detected/);
+  choice = 0;
   await context.TOC.change(reader, { type:'add', title:'Chapter 3', pageIndex:2 });
-  assert.ok(calls.includes('reload')); assert.ok(calls.includes('sidebar')); assert.ok(calls.includes('getOutline2'));
+  assert.equal(sidebar(), 'Intro Methods Chapter 3');
+  assert.deepEqual(inner._state.outline[1].location.position, { pageIndex: 0, rects: [[50, 400, 50, 400]] });
+  // The sidebar is updated in place, without reloading the PDF.
+  assert.ok(calls.includes('direct')); assert.ok(calls.includes('sidebar')); assert.ok(!calls.includes('reload'));
+  assert.ok(!labels(null).includes('Save detected headings to PDF'));
+  // Selected text in the PDF becomes an entry at that spot.
+  const offered = [];
+  context.TOC.viewMenu({ reader, append: item => offered.push(item) });
+  assert.equal(offered.length, 0);
+  inner._lastView._selectionRanges = [{ collapsed: false, text: ' Pre\nface ', position: { pageIndex: 1, rects: [[72, 600, 150, 620]] } }];
+  context.TOC.viewMenu({ reader, append: item => offered.push(item) });
+  assert.equal(offered[0].label, 'Add outline item');
+  await offered[0].onCommand();
+  assert.equal(sidebar(), 'Intro Methods Pre face Chapter 3');
+  assert.deepEqual(inner._state.outline[2].location.position, { pageIndex: 1, rects: [[72, 620, 72, 620]] });
+  await context.TOC.change(reader, { type:'remove', targets:[row(0), row(1), row(2)] });
   assert.equal(sidebar(), 'Chapter 3');
   assert.equal(inner._state.outline[0].location.position.pageIndex, 2);
   const changed = await fs.readFile(file);
@@ -135,7 +168,7 @@ test('bootstrap: current page, disk save, backups, permissions, sidebar edits, c
   assert.equal(menu(0)['Move up'], false); assert.equal(menu(0)['Move down'], true);
   assert.equal(menu(1)['Nest under entry above'], true); assert.equal(menu(1)['Move down'], false);
   assert.ok('Add sub-entry for page 2…' in menu(0)); assert.ok('Delete…' in menu(0));
-  assert.deepEqual(Array.from(context.TOC.menuItems(reader, null, 1), i => i[0]), ['Add entry for page 2…']);
+  assert.deepEqual(labels(null), ['Add entry for page 2…']);
   // Several entries at once; the moved entries are reported for reselection.
   const moved = await context.TOC.change(reader, { type:'move', direction:'down', targets:[row(0)] });
   assert.deepEqual(Array.from(moved, p => [...p]), [[1]]);
@@ -145,9 +178,11 @@ test('bootstrap: current page, disk save, backups, permissions, sidebar edits, c
   await context.TOC.change(reader, { type:'move', direction:'outdent', ...row(1) });
   await context.TOC.change(reader, { type:'remove', ...row(0) });
   await context.TOC.change(reader, { type:'remove', ...row(0) });
+  // With nothing saved, the PDF is reloaded so Zotero can detect headings again.
+  assert.ok(calls.includes('reload')); assert.ok(calls.includes('getOutline2'));
   assert.deepEqual(inner._state.outline, []);
   assert.equal(context.TOC.scope.TOCOutline.tree((await context.TOC.load(reader)).pdf).length, 0);
-  context.shutdown(); assert.ok(calls.includes('unregister'));
+  context.shutdown(); assert.ok(calls.includes('unregister renderToolbar')); assert.ok(calls.includes('unregister createViewContextMenu'));
   await assert.rejects(context.TOC.change(reader,{type:'remove',path:[0]}), /disabled/);
   await fs.rm(dir, { recursive:true });
 });

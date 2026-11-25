@@ -41,10 +41,11 @@ test('add, sort, Unicode, rename, delete, reopen; page content survives', async 
   assert.deepEqual(add(pdf, 'Châpitre 一 🧪', 0), { path: [0], title: 'Châpitre 一 🧪', total: 2 });
   pdf = await roundtrip(pdf);
   assert.deepEqual(O.tree(pdf).map(e => [e.title, e.pageIndex]), [['Châpitre 一 🧪', 0], ['Chapter 3', 2]]);
+  const height = pdf.getPage(0).getHeight();
   O.edit(pdf, { type: 'rename', path: [0], title: ' Opening ' });
   assert.deepEqual(O.edit(pdf, { type: 'remove', path: [1] }), { path: null, title: null, total: 1 });
   pdf = await roundtrip(pdf);
-  assert.deepEqual(O.tree(pdf), [{ title: 'Opening', pageIndex: 0, children: [] }]);
+  assert.deepEqual(O.tree(pdf), [{ title: 'Opening', pageIndex: 0, top: height, left: 0, children: [] }]);
   O.edit(pdf, { type: 'retarget', path: [0], pageIndex: 3 });
   assert.equal(O.tree(await roundtrip(pdf))[0].pageIndex, 3);
   O.edit(pdf, { type: 'remove', path: [0] });
@@ -171,4 +172,26 @@ test('moves and deletes several entries at once', async () => {
   pdf = await roundtrip(pdf);
   assert.equal(show(O.tree(pdf)), 'B E');
   checkLinks(pdf);
+});
+test('saves detected headings and entries at a spot on the page', async () => {
+  let pdf = await fixture();
+  const seed = [{ title: ' Part  One ', pageIndex: 0, top: 700, left: 50, children: [
+    { title: 'Section', pageIndex: 1, top: 600, left: 60, children: [] }, { title: '', pageIndex: 99 }] }];
+  // Paths are the ones the sidebar showed, even for a lone parent.
+  assert.deepEqual(O.edit(pdf, { type: 'rename', path: [0], title: 'Part 1', seed }), { path: [0], title: 'Part 1', total: 3 });
+  pdf = await roundtrip(pdf);
+  checkLinks(pdf);
+  const [part] = O.tree(pdf);
+  assert.deepEqual([part.title, part.pageIndex, part.top, part.left], ['Part 1', 0, 700, 50]);
+  assert.deepEqual(part.children.map(e => [e.title, e.pageIndex, e.top]), [['Section', 1, 600], ['Untitled', 1, pdf.getPage(1).getHeight()]]);
+  // Only a PDF without entries can be seeded.
+  assert.throws(() => O.edit(pdf, { type: 'import', seed }), /out of date/);
+  assert.throws(() => O.edit(pdf, { type: 'import' }), /Unknown/);
+  pdf = await fixture();
+  assert.equal(O.edit(pdf, { type: 'import', seed }).total, 3);
+  assert.deepEqual(add(pdf, 'Here', 2, { top: 123.5, left: 40 }).path, [1]);
+  pdf = await roundtrip(pdf);
+  checkLinks(pdf);
+  const here = O.tree(pdf)[1];
+  assert.deepEqual([here.pageIndex, here.top, here.left], [2, 123.5, 40]);
 });
