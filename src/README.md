@@ -21,10 +21,3 @@ In the PDF itself:
 If a PDF has no table of contents of its own, Zotero shows headings it detected. These aren't stored in the PDF. Right-click the list and choose **Save detected headings to PDF** to keep and edit them; you are also asked about this the first time you add or change an entry.
 
 Encrypted, signed, and read-only PDFs are refused.
-
-## Develop
-
-Run the tests with `node --test tests/*.test.cjs` and build the `.xpi` with `python3 build.py`, which also writes `updates.json`.
-
-To release: set the version in `src/manifest.json`, run `python3 build.py`, commit (including `updates.json`), push, then push a tag named `v<version>`. GitHub Actions tests, builds, and attaches the `.xpi` to the release. See
-[CHANGELOG.md](CHANGELOG.md).
